@@ -68,3 +68,18 @@ bool board_pmic_voltage_plausible(uint16_t millivolts)
     /* 0 while the PMIC's battery voltage ADC is disabled. */
     return millivolts > 0 && millivolts <= 6000;
 }
+
+bool board_pmic_percent_valid(uint8_t percent)
+{
+    return percent <= 100;
+}
+
+uint16_t board_pmic_aldo1_mv(uint8_t voltage_register)
+{
+    /* 0x92 bits 4..0: 0.5 V + 100 mV per step; codes above 28 (3.3 V) are reserved. */
+    uint8_t code = voltage_register & 0x1FU;
+    if (code > 28U) {
+        return 0;
+    }
+    return (uint16_t)(500U + 100U * code);
+}

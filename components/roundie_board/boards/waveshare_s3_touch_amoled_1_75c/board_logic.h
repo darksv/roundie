@@ -37,10 +37,33 @@ bool board_touch_filter_update(board_touch_filter_t *filter, board_touch_report_
 /* Bus error or controller restart: no touch is held. */
 void board_touch_filter_reset(board_touch_filter_t *filter);
 
-/* AXP2101 status registers 0x00 and 0x01 and battery voltage registers
- * 0x34..0x35. Register meanings are a hypothesis from XPowersLib
- * (docs/hardware-audit-1.75c.md). */
+/* AXP2101 registers, checked against the AXP2101 datasheet V1.0 and on the
+ * board (docs/hardware-audit-1.75c.md):
+ *   0x00 bit 3      battery present
+ *   0x01 bits 6..5  01 charging, 10 discharging
+ *   0x30 bit 0      battery voltage ADC enable
+ *   0x34..0x35      battery voltage, mV
+ *   0x68 bit 0      battery detection enable
+ *   0x90 bit 0      ALDO1 enable
+ *   0x92 bits 4..0  ALDO1 voltage
+ *   0xA4            fuel-gauge state of charge, percent */
+#define BOARD_PMIC_REG_STATUS1 0x00
+#define BOARD_PMIC_REG_ADC_CHANNEL_CTRL 0x30
+#define BOARD_PMIC_ADC_VBAT_BIT 0x01
+#define BOARD_PMIC_REG_VBAT_H 0x34
+#define BOARD_PMIC_REG_BAT_DET_CTRL 0x68
+#define BOARD_PMIC_BAT_DET_BIT 0x01
+#define BOARD_PMIC_REG_LDO_ONOFF_CTRL0 0x90
+#define BOARD_PMIC_LDO_ALDO1_BIT 0x01
+#define BOARD_PMIC_REG_ALDO1_VOLTAGE 0x92
+#define BOARD_PMIC_REG_BAT_PERCENT 0xA4
+/* ALDO1 feeds the codecs' analog supply; enabled only when already set to this. */
+#define BOARD_PMIC_ALDO1_EXPECTED_MV 3300U
+
 bool board_pmic_battery_present(const uint8_t status[2]);
 bool board_pmic_discharging(const uint8_t status[2]);
 uint16_t board_pmic_battery_mv(const uint8_t voltage[2]);
 bool board_pmic_voltage_plausible(uint16_t millivolts);
+bool board_pmic_percent_valid(uint8_t percent);
+/* ALDO1 setting in mV, 0 for a reserved code. */
+uint16_t board_pmic_aldo1_mv(uint8_t voltage_register);

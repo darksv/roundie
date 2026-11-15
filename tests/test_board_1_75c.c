@@ -115,6 +115,18 @@ static void check_pmic(void)
     assert(board_pmic_voltage_plausible(6000));
     assert(!board_pmic_voltage_plausible(6001));
     assert(!board_pmic_voltage_plausible(8191));
+
+    assert(board_pmic_percent_valid(0));
+    assert(board_pmic_percent_valid(100));
+    assert(!board_pmic_percent_valid(101));
+    assert(!board_pmic_percent_valid(0xFF));
+
+    /* 0x92 bits 4..0: 0.5 V + 100 mV per step, 28 = 3.3 V, higher codes reserved. */
+    assert(board_pmic_aldo1_mv(0x00) == 500);
+    assert(board_pmic_aldo1_mv(0x1C) == 3300);
+    assert(board_pmic_aldo1_mv(0xFC) == 3300);
+    assert(board_pmic_aldo1_mv(0x1D) == 0);
+    assert(board_pmic_aldo1_mv(0x1F) == 0);
 }
 
 int main(void)

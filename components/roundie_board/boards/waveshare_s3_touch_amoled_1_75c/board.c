@@ -81,6 +81,61 @@ static esp_err_t read_register(i2c_master_dev_handle_t device, uint8_t address,
                                        I2C_TIMEOUT_MS);
 }
 
+static esp_err_t set_register_bits(i2c_master_dev_handle_t device, uint8_t address,
+                                   uint8_t mask)
+{
+    uint8_t value = 0;
+    esp_err_t error = read_register(device, address, &value, 1);
+    if (error != ESP_OK) {
+        return error;
+    }
+    if ((value & mask) == mask) {
+        return ESP_OK;
+    }
+    uint8_t request[2] = {address, (uint8_t)(value | mask)};
+    return i2c_master_transmit(device, request, sizeof(request), I2C_TIMEOUT_MS);
+}
+
+/* Enables only what the readings and the codecs need; no voltage, charger or
+ * power-key setting is changed. The battery voltage ADC and battery detection
+ * feed roundie_board_battery_read(). ALDO1 (A3V3) feeds the ES8311 and ES7210
+ * analog side; it is switched on only when already set to 3.3 V, otherwise it
+ * is left alone and reported. Device test 2026-11-14: battery 4064..4196 mV
+ * and the charge direction followed USB plug and unplug; playback was heard. */
+static void start_pmic(roundie_board_t *board)
+{
+    esp_err_t error = set_register_bits(board->pmic, BOARD_PMIC_REG_ADC_CHANNEL_CTRL,
+                                        BOARD_PMIC_ADC_VBAT_BIT);
+    if (error != ESP_OK) {
+        ESP_LOGW(TAG, "AXP2101 battery voltage ADC enable: %s", esp_err_to_name(error));
+    }
+    error = set_register_bits(board->pmic, BOARD_PMIC_REG_BAT_DET_CTRL,
+                              BOARD_PMIC_BAT_DET_BIT);
+    if (error != ESP_OK) {
+        ESP_LOGW(TAG, "AXP2101 battery detection enable: %s", esp_err_to_name(error));
+    }
+
+    uint8_t aldo1_voltage = 0;
+    error = read_register(board->pmic, BOARD_PMIC_REG_ALDO1_VOLTAGE, &aldo1_voltage, 1);
+    if (error != ESP_OK) {
+        ESP_LOGW(TAG, "AXP2101 ALDO1 voltage read: %s", esp_err_to_name(error));
+        return;
+    }
+    uint16_t aldo1_mv = board_pmic_aldo1_mv(aldo1_voltage);
+    ESP_LOGI(TAG, "AXP2101 ALDO1 setting: %u mV (register 0x%02x)", (unsigned)aldo1_mv,
+             aldo1_voltage);
+    if (aldo1_mv != BOARD_PMIC_ALDO1_EXPECTED_MV) {
+        ESP_LOGW(TAG, "ALDO1 is not %u mV; left unchanged, codec analog supply unverified",
+                 (unsigned)BOARD_PMIC_ALDO1_EXPECTED_MV);
+        return;
+    }
+    error = set_register_bits(board->pmic, BOARD_PMIC_REG_LDO_ONOFF_CTRL0,
+                              BOARD_PMIC_LDO_ALDO1_BIT);
+    if (error != ESP_OK) {
+        ESP_LOGW(TAG, "AXP2101 ALDO1 enable: %s", esp_err_to_name(error));
+    }
+}
+
 static esp_err_t start_i2c(roundie_board_t *board, roundie_board_status_t *status)
 {
     const i2c_master_bus_config_t bus_config = {
@@ -114,6 +169,8 @@ static esp_err_t start_i2c(roundie_board_t *board, roundie_board_status_t *statu
     if (pmic_add != ESP_OK) {
         ESP_LOGE(TAG, "PMIC handle: %s", esp_err_to_name(pmic_add));
         status->gauge = pmic_add;
+    } else if (status->gauge == ESP_OK) {
+        start_pmic(board);
     }
     return ESP_OK;
 }
@@ -698,15 +755,11 @@ static roundie_sensor_state_t pmic_error(roundie_board_t *board, esp_err_t error
     return ROUNDIE_SENSOR_COMM_ERROR;
 }
 
-/* AXP2101, read only: nothing is written to the PMIC. Register meanings are a
- * hypothesis taken from the XPowersLib register map, not yet checked on this
- * board (docs/hardware-audit-1.75c.md):
- *   0x00 bit 3       battery connected
- *   0x01 bits 6..5   01 charging, 10 discharging
- *   0x34..0x35       battery voltage in mV, 13 bits; reads 0 while the
- *                    PMIC's battery voltage ADC is disabled
- * The PMIC's own fuel gauge is not used, so the state is at best
- * ROUNDIE_SENSOR_UNCALIBRATED with no state of charge, current or temperature. */
+/* AXP2101 status, battery voltage and fuel-gauge percent (board_logic.h); the
+ * ADC is enabled by start_pmic(). The gauge runs on its defaults: the battery
+ * model register 0xA1 that the datasheet recommends is not programmed, so the
+ * percent is the PMIC's estimate, unchecked against a discharge curve. The
+ * PMIC reports no current, temperature or capacity here. */
 void roundie_board_battery_read(roundie_board_t *board,
                                  roundie_battery_sample_t *sample)
 {
@@ -739,7 +792,7 @@ void roundie_board_battery_read(roundie_board_t *board,
     sample->error = ESP_OK;
 
     uint8_t voltage[2];
-    error = read_register(board->pmic, 0x34, voltage, sizeof(voltage));
+    error = read_register(board->pmic, BOARD_PMIC_REG_VBAT_H, voltage, sizeof(voltage));
     if (error != ESP_OK) {
         sample->error = error;
         sample->state = pmic_error(board, error);
@@ -748,5 +801,19 @@ void roundie_board_battery_read(roundie_board_t *board,
     uint16_t millivolts = board_pmic_battery_mv(voltage);
     sample->voltage_mv = millivolts;
     sample->voltage_valid = board_pmic_voltage_plausible(millivolts);
+
+    uint8_t percent = 0;
+    error = read_register(board->pmic, BOARD_PMIC_REG_BAT_PERCENT, &percent, 1);
+    if (error != ESP_OK) {
+        sample->error = error;
+        sample->state = pmic_error(board, error);
+        return;
+    }
+    sample->soc_percent = percent;
+    sample->soc_valid = board_pmic_percent_valid(percent);
+    sample->initialized = sample->soc_valid;
+    if (sample->voltage_valid && sample->soc_valid) {
+        sample->state = ROUNDIE_SENSOR_VALID;
+    }
     sample->observed_us = esp_timer_get_time();
 }
