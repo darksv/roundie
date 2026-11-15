@@ -454,16 +454,20 @@ esp_err_t roundie_board_backlight_set(roundie_board_t *board, uint8_t percent)
     return error;
 }
 
-/* Same policy as the 1.85B: reset and initialize again, then repaint. Whether
- * the CO5300 keeps its memory after DISPOFF or light sleep is not yet tested;
- * the full sequence takes about 1.2 s (two 600 ms vendor delays). */
+/* Screen-off is brightness 0 plus DISPOFF; the panel stays powered and keeps
+ * its frame memory, also through light sleep. A reset and the vendor sequence
+ * would instead show undefined memory until the repaint reaches it: a green band
+ * at the bottom, painted last, was seen on wake. So the panel is only switched
+ * on again and the kept frame is shown at once. Device test 2026-11-14 (owner
+ * observation): no band after screen-off, and the screen came back after touch
+ * and BOOT wakes from light sleep (docs/hardware-audit-1.75c.md). */
 esp_err_t roundie_board_display_restore(roundie_board_t *board, bool *repaint)
 {
     if (board == NULL || board->panel == NULL || repaint == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    *repaint = true;
-    return initialize_panel(board);
+    *repaint = false;
+    return esp_lcd_panel_disp_on_off(board->panel, true);
 }
 
 esp_err_t roundie_board_display_power(roundie_board_t *board, bool on)
