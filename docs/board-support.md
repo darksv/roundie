@@ -4,8 +4,10 @@
 ESP32-S3-Touch-LCD-1.85B and ESP32-S3-Touch-AMOLED-1.75C. The boundary below is
 an architectural decision of this refactor. Host tests and target builds of
 both boards pass. The 1.85B device results are recorded at the end. The 1.75C
-is **hardware-ready, hardware-unverified**: it has not been run on hardware
-([hardware-audit-1.75c.md](hardware-audit-1.75c.md)).
+was tested on one board with an earlier port that shares this port's pins,
+PMIC, microphone, IMU, wake and panel-restore code; this port's canvas
+scaling, 40 MHz pixel clock and touch filter are not yet run on hardware
+([hardware-audit-1.75c.md](hardware-audit-1.75c.md#device-results-2026-11-13-and-2026-11-14)).
 
 ## Boards
 
@@ -16,11 +18,13 @@ is **hardware-ready, hardware-unverified**: it has not been run on hardware
 | Draw limit | 360 × 20 (or 60) pixels, align 1 | 466 × 24 pixels, align 2 |
 | Touch | CST816S | CST9217 |
 | RTC | PCF85063 (`ROUNDIE_BOARD_CAP_RTC`) | None; system clock and RTC timer |
-| Battery | BQ27220 fuel gauge | AXP2101, read only: presence, charge direction, voltage |
+| Battery | BQ27220 fuel gauge | AXP2101: presence, charge direction, voltage, gauge percent (ADC and detection enabled at start) |
+| Microphone | None | ES7210, MIC1 and MIC2 (`ROUNDIE_BOARD_CAP_MICROPHONE`) |
+| IMU | None | QMI8658 (`ROUNDIE_BOARD_CAP_IMU`) |
 | Speaker | ES8311 | ES8311 |
 | Wake | Touch INT, BOOT | Touch INT, BOOT |
 | Flash, PSRAM | 16 MB, 8 MB Octal | 32 MB per wiki, 16 MB per schematic; 16 MiB image header, 8 MB Octal |
-| Status | Hardware-verified (results below) | Hardware-ready, hardware-unverified: builds and host tests only |
+| Status | Hardware-verified (results below) | Board facts, PMIC, microphone, IMU, wake and panel restore verified with an earlier port; display scaling and touch filter pending |
 
 ## Boundary
 
@@ -33,8 +37,8 @@ GPIOs, bus ports, I²C addresses and chips. Everything else uses
 | Bring-up | `roundie_board_start`, `roundie_board_start_recovery`, `roundie_board_stop` | Probe results in `roundie_board_status_t` |
 | Display | `roundie_board_display_set_draw_done`, `roundie_board_display_draw`, `roundie_board_display_power`, `roundie_board_display_restore`, `roundie_board_backlight_set` | GUI task only; the done callback runs in ISR context |
 | Touch | `roundie_board_touch_read` | Polled by the LVGL input device |
-| Speaker | `roundie_board_speaker_start`, `roundie_board_speaker_read_register` | Returns an `esp_codec_dev` output device; `roundie_audio` owns playback |
-| RTC, battery | `roundie_board_rtc_read`, `roundie_board_rtc_set_trusted`, `roundie_board_battery_read` | A missing chip is a sensor state, not an error path |
+| Speaker | `roundie_board_speaker_start`, `roundie_board_speaker_read_register` | Returns an `esp_codec_dev` output device, and an input device on a board with a microphone; `roundie_audio` owns both |
+| RTC, battery, IMU | `roundie_board_rtc_read`, `roundie_board_rtc_set_trusted`, `roundie_board_battery_read`, `roundie_board_imu_read` | A missing chip is a sensor state, not an error path |
 | Buttons, wake | `roundie_board_boot_pressed`, `roundie_board_wake_arm`, `roundie_board_wake_source_active`, `roundie_board_wake_disarm` | Light-sleep wake sources are the board's |
 
 Calendar conversion (`rtc_time.c`) is board-independent and shared.
@@ -89,6 +93,8 @@ firmware code reads it:
 | `ROUNDIE_BOARD_CAP_SPEAKER` | `main.c` | `roundie_audio_init` is not called; `rep_audio_v1` reports no audio |
 | `ROUNDIE_BOARD_CAP_ROUND_DISPLAY` | `main.c` (static assert) | Build fails: the launcher and round UI need a round panel |
 | `ROUNDIE_BOARD_CAP_RTC` | `main.c` | The system clock alone keeps time after an explicit sync ([details](rtc-time-sync.md#boards-without-an-external-rtc)) |
+| `ROUNDIE_BOARD_CAP_MICROPHONE` | board (`speaker.microphone`) | `microphone` is NULL; the RA1 `MIC` diagnostic returns `ESP_ERR_NOT_SUPPORTED` |
+| `ROUNDIE_BOARD_CAP_IMU` | `main.c` | No IMU log in the sensor worker; `roundie_board_imu_read` reports `ROUNDIE_SENSOR_UNAVAILABLE` |
 
 The fuel gauge and wake sources have no bit. Their absence is reported
 at run time (`ROUNDIE_SENSOR_*` states, `ESP_ERR_NOT_FOUND`,

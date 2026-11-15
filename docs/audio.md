@@ -36,8 +36,13 @@ follow AGENTS.md: **fact**, **proposal**, **assumption**, **experiment**.
   and the power interplay, and runs only on a board with
   `ROUNDIE_BOARD_CAP_SPEAKER` ([board-support.md](board-support.md)). The
   code moved unchanged; the A1–A3 results below were measured before the move.
-- **Playback only,** 16-bit stereo PCM, sample rates fixed per stream. No
-  microphone, no ES7210, no recording.
+- **Playback,** 16-bit stereo PCM, sample rates fixed per stream. Recording is
+  not an application feature. On a board with `ROUNDIE_BOARD_CAP_MICROPHONE`
+  (the 1.75C's ES7210) the board also hands over an input device on the same
+  I²S port, opened full duplex. Only the development RA1 command `MIC <ms>`
+  uses it: a worker owns the codec for the recording (100..5000 ms, 30 dB
+  gain, MIC1 and MIC2) and logs the peak and RMS of each channel. Device
+  results: [hardware-audit-1.75c.md](hardware-audit-1.75c.md#device-results-2026-11-13-and-2026-11-14).
 - **A system audio task** feeds the I²S DMA; applications never own a task or the
   codec. An application writes PCM into a bounded ring through `rep_audio_v1`
   (gate A3); the ring and every handle belong to the application instance and
