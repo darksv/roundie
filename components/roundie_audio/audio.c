@@ -1,4 +1,5 @@
 #include "roundie_audio.h"
+#include <math.h>
 #include <stdatomic.h>
 #include <string.h>
 #include "esp_codec_dev.h"
@@ -53,6 +54,7 @@ static const note_t melody[] = {
 #define NOTE_GAP_FRAMES 320U /* 20 ms of silence between notes */
 
 static esp_codec_dev_handle_t device;
+static esp_codec_dev_handle_t microphone; /* NULL without a board microphone */
 static roundie_board_t *audio_board; /* for the register read; set once by init */
 static QueueHandle_t requests;
 static roundie_audio_status_t status;
@@ -301,6 +303,7 @@ esp_err_t roundie_audio_init(roundie_board_t *board)
     }
     audio_board = board;
     device = speaker.device;
+    microphone = speaker.microphone;
     stream_mutex = xSemaphoreCreateMutex();
     requests = xQueueCreate(1, sizeof(tone_request_t));
     if (stream_mutex == NULL || requests == NULL || xTaskCreate(audio_task, "audio", TASK_STACK, NULL, TASK_PRIORITY, NULL) != pdPASS) {
@@ -583,6 +586,85 @@ esp_err_t roundie_audio_stream_selftest(uint32_t frequency_hz, uint32_t duration
     if (xTaskCreate(selftest_task, "audio_feed", 3072, test, 2, NULL) != pdPASS) {
         heap_caps_free(test);
         atomic_store(&selftest_running, false);
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+
+#define MIC_CHUNK_FRAMES 256U
+#define MIC_CHANNELS 2U
+#define MIC_READ_ERROR_LIMIT 10U
+#define MIC_TEST_MAX_MS 5000U
+#define MIC_GAIN_DB 30.0F /* from vendor examples; clips with nearby sound on the 1.75C */
+
+/* Owns the codec (busy) for the whole recording, then releases it. */
+static void mic_test_task(void *argument)
+{
+    uint32_t duration_ms = (uint32_t)(uintptr_t)argument;
+    esp_codec_dev_sample_info_t format = {
+        .bits_per_sample = 16,
+        .channel = MIC_CHANNELS,
+        .sample_rate = ROUNDIE_AUDIO_SAMPLE_RATE,
+    };
+    int32_t peak[MIC_CHANNELS] = {0, 0};
+    uint64_t square_sum[MIC_CHANNELS] = {0, 0};
+    uint32_t frames = 0;
+    uint32_t read_errors = 0;
+    int opened = esp_codec_dev_open(microphone, &format);
+    if (opened == ESP_CODEC_DEV_OK) {
+        esp_codec_dev_set_in_gain(microphone, MIC_GAIN_DB);
+        static int16_t buffer[MIC_CHANNELS * MIC_CHUNK_FRAMES];
+        uint32_t wanted = ROUNDIE_AUDIO_SAMPLE_RATE / 1000U * duration_ms;
+        while (frames < wanted && read_errors < MIC_READ_ERROR_LIMIT) {
+            if (esp_codec_dev_read(microphone, buffer, (int)sizeof(buffer)) != ESP_CODEC_DEV_OK) {
+                read_errors++;
+                continue;
+            }
+            for (uint32_t frame = 0; frame < MIC_CHUNK_FRAMES; frame++) {
+                for (uint32_t channel = 0; channel < MIC_CHANNELS; channel++) {
+                    int32_t sample = buffer[MIC_CHANNELS * frame + channel];
+                    int32_t magnitude = sample < 0 ? -sample : sample;
+                    if (magnitude > peak[channel]) {
+                        peak[channel] = magnitude;
+                    }
+                    square_sum[channel] += (uint64_t)((int64_t)sample * sample);
+                }
+            }
+            frames += MIC_CHUNK_FRAMES;
+        }
+        esp_codec_dev_close(microphone);
+    }
+    uint32_t rms[MIC_CHANNELS] = {0, 0};
+    for (uint32_t channel = 0; channel < MIC_CHANNELS; channel++) {
+        if (frames > 0) {
+            rms[channel] = (uint32_t)sqrt((double)square_sum[channel] / (double)frames);
+        }
+    }
+    ESP_LOGI(TAG, "Mic test %u ms: open=%d, frames=%u, read errors=%u, ch0 peak %d rms %u, "
+             "ch1 peak %d rms %u (16-bit full scale 32767, gain %d dB)",
+             (unsigned)duration_ms, opened, (unsigned)frames, (unsigned)read_errors,
+             (int)peak[0], (unsigned)rms[0], (int)peak[1], (unsigned)rms[1], (int)MIC_GAIN_DB);
+    atomic_store(&busy, false);
+    vTaskDelete(NULL);
+}
+
+esp_err_t roundie_audio_mic_test(uint32_t duration_ms)
+{
+    if (!status.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (microphone == NULL) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    if (duration_ms < 100U || duration_ms > MIC_TEST_MAX_MS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    bool expected = false;
+    if (!atomic_compare_exchange_strong(&busy, &expected, true)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xTaskCreate(mic_test_task, "mic_test", 3072, (void *)(uintptr_t)duration_ms, 2, NULL) != pdPASS) {
+        atomic_store(&busy, false);
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;

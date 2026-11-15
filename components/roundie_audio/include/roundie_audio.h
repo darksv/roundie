@@ -72,6 +72,10 @@ void roundie_audio_set_master(uint8_t percent);
  * middle to provoke an underrun, then closes with drain. */
 esp_err_t roundie_audio_stream_selftest(uint32_t frequency_hz, uint32_t duration_ms, uint8_t volume_percent,
                                         uint32_t stall_ms);
+/* Development, boards with ROUNDIE_BOARD_CAP_MICROPHONE: records duration_ms (100..5000)
+ * in a worker that owns the codec meanwhile, then logs the peak and RMS of each channel.
+ * ESP_ERR_NOT_SUPPORTED without a microphone. */
+esp_err_t roundie_audio_mic_test(uint32_t duration_ms);
 #endif
 /* Ends the tone in progress at its next chunk. */
 void roundie_audio_stop(void);

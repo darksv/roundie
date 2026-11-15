@@ -46,6 +46,12 @@ void roundie_audio_command(char *line, bool discard)
                 error = roundie_audio_stream_selftest((uint32_t)frequency, (uint32_t)duration,
                                                       (uint8_t)(volume > 255 ? 255 : volume), (uint32_t)stall);
             }
+        } else if (strncmp(operation, "MIC ", 4) == 0) {
+            /* MIC <ms>: record from the microphones; the result is a log line. */
+            char *end = NULL;
+            long duration = strtol(operation + 4, &end, 10);
+            error = end != NULL && *end == '\0' && duration >= 0 ?
+                roundie_audio_mic_test((uint32_t)duration) : ESP_ERR_INVALID_ARG;
         } else if (strncmp(operation, "MELODY ", 7) == 0) {
             char *end = NULL;
             long volume = strtol(operation + 7, &end, 10);

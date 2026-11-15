@@ -609,8 +609,42 @@ void roundie_board_wake_disarm(roundie_board_t *board)
     board->wake_armed = false;
 }
 
+/* ES7210 microphone ADC on the shared data interface, an I2S slave clocked from
+ * the MCLK pad like the ES8311. MIC1 and MIC2 form one stereo pair; which inputs
+ * carry the board's microphones is not settled (the schematic shows MIC1..MIC4).
+ * Optional: a failure is logged and the speaker still starts. Device test
+ * 2026-11-14 at 30 dB gain: RMS about 90 in a quiet room and 1500..1800 with
+ * sound, with clipping. */
+static esp_codec_dev_handle_t start_microphone(roundie_board_t *board,
+                                               const audio_codec_data_if_t *data)
+{
+    audio_codec_i2c_cfg_t i2c_config = {.addr = ES7210_CODEC_DEFAULT_ADDR, .bus_handle = board->i2c_bus};
+    const audio_codec_ctrl_if_t *control = audio_codec_new_i2c_ctrl(&i2c_config);
+    if (control == NULL) {
+        ESP_LOGW(TAG, "ES7210 control interface: no memory");
+        return NULL;
+    }
+    es7210_codec_cfg_t codec_config = {
+        .ctrl_if = control,
+        .master_mode = false,
+        .mic_selected = ES7210_SEL_MIC1 | ES7210_SEL_MIC2,
+        .mclk_src = ES7210_MCLK_FROM_PAD,
+        .mclk_div = 0, /* driver default, MCLK = 256 x LRCK */
+    };
+    const audio_codec_if_t *codec = es7210_codec_new(&codec_config);
+    if (codec == NULL) {
+        ESP_LOGW(TAG, "ES7210 codec: not started");
+        return NULL;
+    }
+    esp_codec_dev_cfg_t device_config = {.dev_type = ESP_CODEC_DEV_TYPE_IN, .codec_if = codec, .data_if = data};
+    esp_codec_dev_handle_t microphone = esp_codec_dev_new(&device_config);
+    ESP_LOGI(TAG, "ES7210 microphone device: %s", microphone != NULL ? "ok" : "not created");
+    return microphone;
+}
+
 /* Identity probe, then I2S, then the ES8311 through esp_codec_dev, as on the
- * 1.85B with this board's pins. Started once; nothing here is torn down. */
+ * 1.85B with this board's pins, and the ES7210 microphone. Started once;
+ * nothing here is torn down. */
 esp_err_t roundie_board_speaker_start(roundie_board_t *board, uint32_t sample_rate,
                                       roundie_board_speaker_t *speaker)
 {
@@ -646,10 +680,13 @@ esp_err_t roundie_board_speaker_start(roundie_board_t *board, uint32_t sample_ra
         i2c_master_bus_rm_device(identity);
     }
 
+    /* Full duplex: the ES7210 shares MCLK, BCLK and WS with the ES8311, so its
+     * receive channel is created together with the transmit channel. */
     i2s_chan_handle_t transmit = NULL;
+    i2s_chan_handle_t receive = NULL;
     i2s_chan_config_t channel_config = I2S_CHANNEL_DEFAULT_CONFIG(BOARD_I2S_PORT, I2S_ROLE_MASTER);
     channel_config.auto_clear = true; /* silence, not a repeated buffer, if the feed stops */
-    esp_err_t error = i2s_new_channel(&channel_config, &transmit, NULL);
+    esp_err_t error = i2s_new_channel(&channel_config, &transmit, &receive);
     if (error != ESP_OK) {
         speaker->failed_step = "i2s channel";
         return error;
@@ -662,12 +699,17 @@ esp_err_t roundie_board_speaker_start(roundie_board_t *board, uint32_t sample_ra
             .bclk = BOARD_I2S_BCLK,
             .ws = BOARD_I2S_WS,
             .dout = BOARD_I2S_DOUT,
-            .din = I2S_GPIO_UNUSED,
+            .din = BOARD_I2S_DIN,
         },
     };
     error = i2s_channel_init_std_mode(transmit, &standard_config);
+    if (error == ESP_OK) {
+        /* Same clocks and slots as transmit: the two share BCLK and WS. */
+        error = i2s_channel_init_std_mode(receive, &standard_config);
+    }
     if (error != ESP_OK) {
         i2s_del_channel(transmit);
+        i2s_del_channel(receive);
         speaker->failed_step = "i2s init";
         return error;
     }
@@ -675,11 +717,12 @@ esp_err_t roundie_board_speaker_start(roundie_board_t *board, uint32_t sample_ra
     audio_codec_i2c_cfg_t i2c_config = {.addr = ES8311_CODEC_DEFAULT_ADDR, .bus_handle = board->i2c_bus};
     const audio_codec_ctrl_if_t *control = audio_codec_new_i2c_ctrl(&i2c_config);
     board->codec_control = control;
-    audio_codec_i2s_cfg_t i2s_config = {.port = BOARD_I2S_PORT, .tx_handle = transmit, .rx_handle = NULL};
+    audio_codec_i2s_cfg_t i2s_config = {.port = BOARD_I2S_PORT, .tx_handle = transmit, .rx_handle = receive};
     const audio_codec_data_if_t *data = audio_codec_new_i2s_data(&i2s_config);
     const audio_codec_gpio_if_t *gpio = audio_codec_new_gpio();
     if (control == NULL || data == NULL || gpio == NULL) {
         i2s_del_channel(transmit);
+        i2s_del_channel(receive);
         speaker->failed_step = "codec interfaces";
         return ESP_ERR_NO_MEM;
     }
@@ -694,6 +737,7 @@ esp_err_t roundie_board_speaker_start(roundie_board_t *board, uint32_t sample_ra
     const audio_codec_if_t *codec = es8311_codec_new(&codec_config);
     if (codec == NULL) {
         i2s_del_channel(transmit);
+        i2s_del_channel(receive);
         speaker->failed_step = "es8311";
         return ESP_FAIL;
     }
@@ -701,9 +745,11 @@ esp_err_t roundie_board_speaker_start(roundie_board_t *board, uint32_t sample_ra
     speaker->device = esp_codec_dev_new(&device_config);
     if (speaker->device == NULL) {
         i2s_del_channel(transmit);
+        i2s_del_channel(receive);
         speaker->failed_step = "codec device";
         return ESP_FAIL;
     }
+    speaker->microphone = start_microphone(board, data);
     speaker->failed_step = "ok";
     ESP_LOGI(TAG, "Speaker: ES8311 id %02x %02x %02x, amplifier on GPIO%d", speaker->codec_id[0],
              speaker->codec_id[1], speaker->codec_id[2], (int)BOARD_SPEAKER_PA);

@@ -47,4 +47,5 @@
 #define BOARD_I2S_BCLK GPIO_NUM_9
 #define BOARD_I2S_WS GPIO_NUM_45
 #define BOARD_I2S_DOUT GPIO_NUM_8
+#define BOARD_I2S_DIN GPIO_NUM_10 /* ES7210 data out; capture verified on the board */
 #define BOARD_SPEAKER_PA GPIO_NUM_46

@@ -30,6 +30,7 @@
 #define ROUNDIE_BOARD_CAP_SPEAKER (1U << 1)       /* roundie_board_speaker_start() */
 #define ROUNDIE_BOARD_CAP_ROUND_DISPLAY (1U << 2) /* circular glass: the round UI needs it */
 #define ROUNDIE_BOARD_CAP_RTC (1U << 3)           /* battery-backed RTC behind roundie_board_rtc_*() */
+#define ROUNDIE_BOARD_CAP_MICROPHONE (1U << 4)    /* roundie_board_speaker_t.microphone */
 
 #include "roundie_board_config.h"
 
@@ -98,9 +99,14 @@ void roundie_board_stop(roundie_board_t *board);
  * codec, its data bus and the amplifier and hands over an esp_codec_dev output
  * device; the caller opens, writes, sets volume and closes it. 16-bit stereo
  * frames. Started once, after roundie_board_start(); not in the recovery
- * display start. failed_step names the step that failed, or "ok". */
+ * display start. failed_step names the step that failed, or "ok".
+ * On a board with ROUNDIE_BOARD_CAP_MICROPHONE the same start also hands over
+ * an esp_codec_dev input device that shares the speaker's data bus and clocks
+ * (same sample rate, 16-bit stereo); it is NULL elsewhere or when the
+ * microphone failed to start, which does not fail the speaker. */
 typedef struct {
     esp_codec_dev_handle_t device;
+    esp_codec_dev_handle_t microphone;
     bool codec_ack;         /* the codec answered on the control bus */
     uint8_t codec_id[3];    /* board-defined identity bytes, for diagnostics */
     const char *failed_step;
