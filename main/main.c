@@ -542,6 +542,48 @@ static void poll_time_commands(int serial_fd, sensor_state_t *shared,
 }
 #endif
 
+#define BOARD_HAS_IMU ((ROUNDIE_BOARD_CAPABILITIES & ROUNDIE_BOARD_CAP_IMU) != 0)
+
+#if BOARD_HAS_IMU
+/* Bring-up diagnostic: one IMU line at the first valid sample and whenever an
+ * acceleration axis has moved by IMU_LOG_STEP_MG since the last line, so tilting
+ * the board shows up in the log without a periodic flood. */
+#define IMU_LOG_STEP_MG 250
+
+static void log_imu_if_moved(const roundie_imu_sample_t *imu)
+{
+    static bool logged_once;
+    static bool logged_error;
+    static float last_mg[3];
+    if (imu->state != ROUNDIE_SENSOR_VALID) {
+        if (!logged_error && imu->state != ROUNDIE_SENSOR_UNAVAILABLE) {
+            ESP_LOGW(TAG, "IMU read: %s", esp_err_to_name(imu->error));
+            logged_error = true;
+        }
+        return;
+    }
+    logged_error = false;
+    bool moved = !logged_once;
+    for (int axis = 0; axis < 3; axis++) {
+        float delta = imu->accel_mg[axis] - last_mg[axis];
+        if (delta >= IMU_LOG_STEP_MG || delta <= -IMU_LOG_STEP_MG) {
+            moved = true;
+        }
+    }
+    if (!moved) {
+        return;
+    }
+    ESP_LOGI(TAG, "IMU accel x=%d y=%d z=%d mg, gyro x=%d y=%d z=%d (0.1 dps), temp %d (0.1 C)",
+             (int)imu->accel_mg[0], (int)imu->accel_mg[1], (int)imu->accel_mg[2],
+             (int)(imu->gyro_dps[0] * 10.0F), (int)(imu->gyro_dps[1] * 10.0F),
+             (int)(imu->gyro_dps[2] * 10.0F), (int)(imu->temperature_c * 10.0F));
+    for (int axis = 0; axis < 3; axis++) {
+        last_mg[axis] = imu->accel_mg[axis];
+    }
+    logged_once = true;
+}
+#endif
+
 static void sensor_worker(void *argument)
 {
     sensor_state_t *shared = argument;
@@ -690,6 +732,11 @@ static void sensor_worker(void *argument)
         shared->rtc = rtc;
         shared->battery = battery;
         portEXIT_CRITICAL(&shared->lock);
+#if BOARD_HAS_IMU
+        roundie_imu_sample_t imu;
+        roundie_board_imu_read(shared->board, &imu);
+        log_imu_if_moved(&imu);
+#endif
     }
 }
 

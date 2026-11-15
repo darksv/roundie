@@ -18,6 +18,7 @@
 #include "esp_log.h"
 #include "esp_sleep.h"
 #include "esp_timer.h"
+#include "qmi8658.h" /* defines M_PI itself: keep <math.h> out of this file */
 #include "board_logic.h"
 #include "board_pins.h"
 
@@ -72,6 +73,8 @@ struct roundie_board {
     roundie_board_draw_done_t draw_done;
     void *draw_done_context;
     const audio_codec_ctrl_if_t *codec_control;
+    qmi8658_dev_t imu;
+    bool imu_ready;
 };
 
 static esp_err_t read_register(i2c_master_dev_handle_t device, uint8_t address,
@@ -136,6 +139,28 @@ static void start_pmic(roundie_board_t *board)
     }
 }
 
+/* QMI8658 at 0x6B through waveshare/qmi8658 2.0.2: its init checks WHO_AM_I
+ * (0x05), then sets +-8 g and +-512 dps at 1000 Hz and enables both sensors;
+ * readings are in mg and dps. Optional: a failure is logged and the board
+ * starts. Device test 2026-11-14, board flat with the screen up: +z points
+ * out of the screen, +x to the top of the image, +y to its left; z read about
+ * 86 mg low. No calibration and no interrupt pin are used. */
+static void start_imu(roundie_board_t *board)
+{
+    esp_err_t error = qmi8658_init(&board->imu, board->i2c_bus, QMI8658_ADDRESS_HIGH);
+    if (error != ESP_OK) {
+        /* The driver adds its device before checking the chip; release it here. */
+        if (board->imu.dev_handle != NULL) {
+            log_cleanup_error("IMU I2C device", i2c_master_bus_rm_device(board->imu.dev_handle));
+            board->imu.dev_handle = NULL;
+        }
+        ESP_LOGW(TAG, "QMI8658 at 0x%02x: %s", QMI8658_ADDRESS_HIGH, esp_err_to_name(error));
+        return;
+    }
+    board->imu_ready = true;
+    ESP_LOGI(TAG, "QMI8658 at 0x%02x: ESP_OK", QMI8658_ADDRESS_HIGH);
+}
+
 static esp_err_t start_i2c(roundie_board_t *board, roundie_board_status_t *status)
 {
     const i2c_master_bus_config_t bus_config = {
@@ -172,6 +197,7 @@ static esp_err_t start_i2c(roundie_board_t *board, roundie_board_status_t *statu
     } else if (status->gauge == ESP_OK) {
         start_pmic(board);
     }
+    start_imu(board);
     return ESP_OK;
 }
 
@@ -406,6 +432,9 @@ void roundie_board_stop(roundie_board_t *board)
     }
     if (board->pmic != NULL) {
         log_cleanup_error("PMIC I2C device", i2c_master_bus_rm_device(board->pmic));
+    }
+    if (board->imu.dev_handle != NULL) {
+        log_cleanup_error("IMU I2C device", i2c_master_bus_rm_device(board->imu.dev_handle));
     }
     if (board->i2c_bus != NULL) {
         log_cleanup_error("I2C bus", i2c_del_master_bus(board->i2c_bus));
@@ -862,4 +891,33 @@ void roundie_board_battery_read(roundie_board_t *board,
         sample->state = ROUNDIE_SENSOR_VALID;
     }
     sample->observed_us = esp_timer_get_time();
+}
+
+void roundie_board_imu_read(roundie_board_t *board, roundie_imu_sample_t *sample)
+{
+    if (sample == NULL) {
+        return;
+    }
+    *sample = (roundie_imu_sample_t){
+        .state = ROUNDIE_SENSOR_UNAVAILABLE,
+        .error = ESP_ERR_INVALID_STATE,
+    };
+    if (board == NULL || !board->imu_ready) {
+        return;
+    }
+    qmi8658_data_t data;
+    esp_err_t error = qmi8658_read_sensor_data(&board->imu, &data);
+    sample->error = error;
+    if (error != ESP_OK) {
+        sample->state = ROUNDIE_SENSOR_COMM_ERROR;
+        return;
+    }
+    sample->state = ROUNDIE_SENSOR_VALID;
+    sample->accel_mg[0] = data.accelX;
+    sample->accel_mg[1] = data.accelY;
+    sample->accel_mg[2] = data.accelZ;
+    sample->gyro_dps[0] = data.gyroX;
+    sample->gyro_dps[1] = data.gyroY;
+    sample->gyro_dps[2] = data.gyroZ;
+    sample->temperature_c = data.temperature;
 }

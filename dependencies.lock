@@ -145,6 +145,16 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 2.0.0
+  waveshare/qmi8658:
+    component_hash: b8cfbcc4147a4fbb8a5cc95c683c587dbdbe5a633f0cf5995dad02ac79cc665a
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.3.2'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.0.2
 direct_dependencies:
 - espressif/elf_loader
 - espressif/esp_codec_dev
@@ -156,6 +166,7 @@ direct_dependencies:
 - joltwallet/littlefs
 - lvgl/lvgl
 - waveshare/esp_lcd_touch_cst9217
-manifest_hash: 934066a71703d34bf66241262c5ecda542de50cfb1f31f8e21fc2466f52dfd3b
+- waveshare/qmi8658
+manifest_hash: b660c2082458ab58797cd091e46e8a8cb82d32f11cc29ec4402bc2a5d7248f9d
 target: esp32s3
 version: 3.0.0

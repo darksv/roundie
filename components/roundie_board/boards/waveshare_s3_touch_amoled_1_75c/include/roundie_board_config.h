@@ -10,7 +10,7 @@
  * docs/hardware-audit-1.75c.md. */
 #define ROUNDIE_BOARD_CAPABILITIES \
     (ROUNDIE_BOARD_CAP_TOUCH | ROUNDIE_BOARD_CAP_SPEAKER | ROUNDIE_BOARD_CAP_ROUND_DISPLAY | \
-     ROUNDIE_BOARD_CAP_MICROPHONE)
+     ROUNDIE_BOARD_CAP_MICROPHONE | ROUNDIE_BOARD_CAP_IMU)
 
 /* CO5300, 466 x 466 RGB565 AMOLED, round glass. The 360 x 360 UI canvas is
  * upscaled (docs/display-rendering.md, "Scaled panels"). */

@@ -31,6 +31,7 @@
 #define ROUNDIE_BOARD_CAP_ROUND_DISPLAY (1U << 2) /* circular glass: the round UI needs it */
 #define ROUNDIE_BOARD_CAP_RTC (1U << 3)           /* battery-backed RTC behind roundie_board_rtc_*() */
 #define ROUNDIE_BOARD_CAP_MICROPHONE (1U << 4)    /* roundie_board_speaker_t.microphone */
+#define ROUNDIE_BOARD_CAP_IMU (1U << 5)           /* roundie_board_imu_read() */
 
 #include "roundie_board_config.h"
 
@@ -166,3 +167,16 @@ esp_err_t roundie_board_rtc_set_trusted(roundie_board_t *board,
                                         const roundie_rtc_time_t *time);
 void roundie_board_battery_read(roundie_board_t *board,
                                 roundie_battery_sample_t *sample);
+
+typedef struct {
+    roundie_sensor_state_t state;
+    esp_err_t error;
+    float accel_mg[3]; /* x, y, z in the sensor's own axes */
+    float gyro_dps[3];
+    float temperature_c;
+} roundie_imu_sample_t;
+
+/* Inertial sensor, same bus rules as the sensors above. Without
+ * ROUNDIE_BOARD_CAP_IMU, or when the sensor did not start, the state is
+ * ROUNDIE_SENSOR_UNAVAILABLE. */
+void roundie_board_imu_read(roundie_board_t *board, roundie_imu_sample_t *sample);

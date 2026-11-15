@@ -964,3 +964,16 @@ void roundie_board_battery_read(roundie_board_t *board,
     }
     sample->observed_us = esp_timer_get_time();
 }
+
+/* No inertial sensor on this board. */
+void roundie_board_imu_read(roundie_board_t *board, roundie_imu_sample_t *sample)
+{
+    (void)board;
+    if (sample == NULL) {
+        return;
+    }
+    *sample = (roundie_imu_sample_t){
+        .state = ROUNDIE_SENSOR_UNAVAILABLE,
+        .error = ESP_ERR_NOT_SUPPORTED,
+    };
+}

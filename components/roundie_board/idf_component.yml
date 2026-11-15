@@ -6,3 +6,4 @@ dependencies:
   # Waveshare ESP32-S3-Touch-AMOLED-1.75C.
   espressif/esp_lcd_co5300: "==2.2.0"
   waveshare/esp_lcd_touch_cst9217: "==2.0.0"
+  waveshare/qmi8658: "==2.0.2"
